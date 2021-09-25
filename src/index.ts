@@ -1,7 +1,14 @@
 import fs from 'fs/promises';
 import path from 'path';
+import boxen from 'boxen';
 import cheerio, { Cheerio, CheerioAPI, Element } from 'cheerio';
+import Listr from 'listr';
 import pino from 'pino';
+
+type Context = {
+  $: CheerioAPI;
+  processedBookmarks: BookmarkList;
+};
 
 const logger = pino({
   prettyPrint: true,
@@ -10,32 +17,20 @@ const logger = pino({
 const dataDirPath = path.join(process.cwd(), 'data');
 
 const getBookmarks = async () => {
-  const filename = 'GoogleBookmarks.html';
-  const filepath = path.join(dataDirPath, filename);
+  const filepath = path.join(dataDirPath, 'GoogleBookmarks.html');
   try {
-    logger.info(`Reading bookmarks from file ${filepath}`);
-
-    const file = await fs.readFile(filepath);
-
-    logger.info('Successfully read bookmarks!');
-
-    return file.toString();
+    return (await fs.readFile(filepath)).toString();
   } catch (err) {
-    throw new Error(`Could not open ${filepath}`);
+    throw new Error(`Could not open Bookmarks from file ${filepath}`);
   }
 };
 
 const saveBookmarksToFile = async (content: BookmarkList) => {
+  const filepath = path.join(dataDirPath, 'result.json');
   try {
-    const filepath = path.join(dataDirPath, 'result.json');
-
-    logger.info(`Saving bookmarks to ${filepath}`);
-
     await fs.writeFile(filepath, JSON.stringify(content, null, 2));
-
-    logger.info(`Bookmarks successfully saved!`);
   } catch (err) {
-    throw new Error('Could not create resulting JSON file');
+    throw new Error(`Could not create resulting JSON file ${filepath}`);
   }
 };
 
@@ -71,16 +66,47 @@ const processGroup = ($: CheerioAPI, $group: Cheerio<Element>) => {
 
 type BookmarkList = Array<ReturnType<typeof processGroup>>;
 
-(async () => {
-  const $ = cheerio.load(await getBookmarks());
+// Tasks
 
-  const bookmarks = $('body > dl > dt')
-    .map((_, group) => processGroup($, $(group)))
-    .toArray();
+const tasks = new Listr([
+  {
+    title: 'Read bookmarks',
+    task: async (ctx: Context) => {
+      ctx.$ = cheerio.load(await getBookmarks());
+    },
+  },
+  {
+    title: 'Process bookmarks',
+    task: (ctx: Context) => {
+      const { $ } = ctx;
+      ctx.processedBookmarks = $('body > dl > dt')
+        .map((_, group) => processGroup($, $(group)))
+        .toArray();
+    },
+  },
+  {
+    title: 'Save results',
+    task: (ctx: Context) => saveBookmarksToFile(ctx.processedBookmarks),
+  },
+]);
 
-  await saveBookmarksToFile(bookmarks);
+// Start
 
-  logger.info('Done!');
-})().catch((err) => {
-  logger.error(err.toString());
+console.log(
+  boxen('Google Bookmarks 2 JSON', {
+    borderStyle: 'single',
+    dimBorder: true,
+    margin: 1,
+    padding: {
+      bottom: 1,
+      left: 5,
+      right: 5,
+      top: 1,
+    },
+    textAlignment: 'center',
+  })
+);
+
+tasks.run().catch((err) => {
+  logger.error(err);
 });
